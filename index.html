@@ -71,10 +71,13 @@
             margin-bottom: 10px;
         }
         .query-row input {
-            flex: 1;
+            flex: 2;
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 4px;
+        }
+        .query-row input:first-child {
+            flex: 1;
         }
         #results {
             margin-top: 20px;
@@ -115,6 +118,28 @@
         .result-table tr:hover {
             background-color: #f2f2f2;
         }
+
+        .back-to-top {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: background-color 0.3s;
+        }
+
+        .back-to-top:hover {
+            background-color: #0056b3;
+        }
     </style>
 </head>
 <body>
@@ -129,13 +154,15 @@
         <div id="querySection" class="query-section">
             <div class="query-row">
                 <input type="text" id="elementName" placeholder="元素名称 (可选，默认为 Code)">
-                <input type="text" id="queryInput" placeholder="查询条件 (例如: value=123 或 name=test)">
+                <input type="text" id="queryInput" placeholder="查询条件 (可选，如: name1=123，支持 =, !=, >, <, >=, <=，可以通过 & 和 | 连接多个条件)">
             </div>
             <button id="queryButton" class="button">查询</button>
         </div>
 
         <div id="results"></div>
     </div>
+
+    <button class="back-to-top" id="backToTop" title="返回顶部">↑</button>
 
     <script>
         let xmlDocument = null;
@@ -194,63 +221,73 @@
             const query = queryInput.value.trim();
             const elementName = elementInput.value.trim() || 'Code';
 
-            if (!query) {
-                showStatus('请输入查询条件', true);
-                return;
-            }
-
             try {
                 // 支持的操作符
                 const operators = ['>=', '<=', '!=', '=', '>', '<'];
-                let operator = null;
-                let attribute = null;
-                let value = null;
+                
+                function parseCondition(condition) {
+                    let operator = null;
+                    let attribute = null;
+                    let value = null;
 
-                // 查找匹配的操作符
-                for (const op of operators) {
-                    if (query.includes(op)) {
-                        operator = op;
-                        [attribute, value] = query.split(op).map(s => s.trim());
-                        break;
+                    // 查找匹配的操作符
+                    for (const op of operators) {
+                        if (condition.includes(op)) {
+                            operator = op;
+                            [attribute, value] = condition.split(op).map(s => s.trim());
+                            break;
+                        }
+                    }
+
+                    if (!operator || !attribute || value === null) {
+                        throw new Error('查询格式无效，请使用如 "attr=value" 或 "attr>=value" 的格式');
+                    }
+
+                    // 清理值中的引号
+                    value = value.replace(/['"]/g, '');
+
+                    // 对于比较运算符，验证值是否为数字
+                    if (['>', '<', '>=', '<='].includes(operator)) {
+                        const numValue = Number(value);
+                        if (isNaN(numValue)) {
+                            throw new Error(`使用 ${operator} 运算符时，值必须是数字`);
+                        }
+                    }
+
+                    // 返回XPath条件表达式
+                    switch (operator) {
+                        case '=':
+                            return `@${attribute}='${value}'`;
+                        case '!=':
+                            return `@${attribute}!='${value}'`;
+                        case '>':
+                            return `number(@${attribute}) > ${value}`;
+                        case '<':
+                            return `number(@${attribute}) < ${value}`;
+                        case '>=':
+                            return `number(@${attribute}) >= ${value}`;
+                        case '<=':
+                            return `number(@${attribute}) <= ${value}`;
                     }
                 }
 
-                if (!operator || !attribute || value === null) {
-                    throw new Error('查询格式无效，请使用如 "attr=value" 或 "attr>=value" 的格式');
-                }
+                let xpath = `//${elementName}`;
+                
+                if (query) {
+                    // 检查是否有OR条件
+                    const orConditions = query.split('|').map(s => s.trim());
+                    const orExpressions = orConditions.map(orCond => {
+                        // 处理AND条件
+                        const andConditions = orCond.split('&').map(s => s.trim());
+                        const andExpressions = andConditions.map(parseCondition);
+                        return andExpressions.length > 1 
+                            ? `(${andExpressions.join(' and ')})`
+                            : andExpressions[0];
+                    });
 
-                // 清理值中的引号
-                value = value.replace(/['"]/g, '');
-
-                // 对于比较运算符，验证值是否为数字
-                if (['>', '<', '>=', '<='].includes(operator)) {
-                    const numValue = Number(value);
-                    if (isNaN(numValue)) {
-                        throw new Error(`使用 ${operator} 运算符时，值必须是数字`);
-                    }
-                }
-
-                // 构建 XPath 表达式
-                let xpath;
-                switch (operator) {
-                    case '=':
-                        xpath = `//${elementName}[@${attribute}='${value}']`;
-                        break;
-                    case '!=':
-                        xpath = `//${elementName}[@${attribute}!='${value}']`;
-                        break;
-                    case '>':
-                        xpath = `//${elementName}[number(@${attribute}) > ${value}]`;
-                        break;
-                    case '<':
-                        xpath = `//${elementName}[number(@${attribute}) < ${value}]`;
-                        break;
-                    case '>=':
-                        xpath = `//${elementName}[number(@${attribute}) >= ${value}]`;
-                        break;
-                    case '<=':
-                        xpath = `//${elementName}[number(@${attribute}) <= ${value}]`;
-                        break;
+                    xpath += orExpressions.length > 0 
+                        ? `[${orExpressions.join(' or ')}]`
+                        : '';
                 }
 
                 const codeElements = xmlDocument.evaluate(
@@ -337,6 +374,26 @@
                 copyToClipboard(columnData.join('\n'));
             }
         }
+
+        // 返回顶部功能
+        const backToTop = document.getElementById('backToTop');
+
+        // 监听滚动事件
+        window.addEventListener('scroll', () => {
+            if (window.pageYOffset > 300) {
+                backToTop.style.display = 'flex';
+            } else {
+                backToTop.style.display = 'none';
+            }
+        });
+
+        // 点击返回顶部
+        backToTop.addEventListener('click', () => {
+            window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        });
     </script>
 </body>
 </html>
