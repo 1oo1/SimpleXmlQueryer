@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XML 查询工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #fileInput {
+            display: none;
+        }
+        .button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        .button:hover {
+            background-color: #0056b3;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            display: none;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .query-section {
+            display: none;
+            margin: 20px 0;
+            padding: 20px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .query-input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .query-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .query-row input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #results {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            overflow-x: auto;
+            display: none;
+        }
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        .result-table th,
+        .result-table td {
+            padding: 12px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+        
+        .result-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .result-table th:first-child {
+            cursor: default;
+        }
+        
+        .result-table tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+        
+        .result-table tr:hover {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <button id="selectButton" class="button">选取 XML 文件</button>
+            <input type="file" id="fileInput" accept=".xml">
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div id="querySection" class="query-section">
+            <div class="query-row">
+                <input type="text" id="elementName" placeholder="元素名称 (可选，默认为 Code)">
+                <input type="text" id="queryInput" placeholder="查询条件 (例如: value=123 或 name=test)">
+            </div>
+            <button id="queryButton" class="button">查询</button>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        let xmlDocument = null;
+        const selectButton = document.getElementById('selectButton');
+        const fileInput = document.getElementById('fileInput');
+        const status = document.getElementById('status');
+        const querySection = document.getElementById('querySection');
+        const queryInput = document.getElementById('queryInput');
+        const queryButton = document.getElementById('queryButton');
+        const results = document.getElementById('results');
+
+        function showStatus(message, isError = false) {
+            status.textContent = message;
+            status.style.display = 'block';
+            status.className = `status ${isError ? 'error' : 'success'}`;
+        }
+
+        selectButton.addEventListener('click', () => {
+            results.style.display = 'none';
+            querySection.style.display = 'none';
+            status.style.display = 'none';
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                try {
+                    const xmlString = e.target.result.replace(/\x1D/g, '[GS]');
+                    const parser = new DOMParser();
+                    xmlDocument = parser.parseFromString(xmlString, 'text/xml');
+
+                    if (xmlDocument.documentElement.firstChild.nodeName === 'parsererror') {
+                        throw new Error('XML 解析错误');
+                    }
+
+                    showStatus('XML 文件加载成功！');
+                    querySection.style.display = 'block';
+                } catch (error) {
+                    showStatus('XML 文件加载失败：' + error.message, true);
+                    xmlDocument = null;
+                }
+            };
+            
+            reader.readAsText(file);
+        });
+
+        queryButton.addEventListener('click', () => {
+            if (!xmlDocument) {
+                showStatus('请先加载 XML 文件', true);
+                return;
+            }
+
+            const query = queryInput.value.trim();
+            const elementName = elementInput.value.trim() || 'Code';
+
+            if (!query) {
+                showStatus('请输入查询条件', true);
+                return;
+            }
+
+            try {
+                // 支持的操作符
+                const operators = ['>=', '<=', '!=', '=', '>', '<'];
+                let operator = null;
+                let attribute = null;
+                let value = null;
+
+                // 查找匹配的操作符
+                for (const op of operators) {
+                    if (query.includes(op)) {
+                        operator = op;
+                        [attribute, value] = query.split(op).map(s => s.trim());
+                        break;
+                    }
+                }
+
+                if (!operator || !attribute || value === null) {
+                    throw new Error('查询格式无效，请使用如 "attr=value" 或 "attr>=value" 的格式');
+                }
+
+                // 清理值中的引号
+                value = value.replace(/['"]/g, '');
+
+                // 对于比较运算符，验证值是否为数字
+                if (['>', '<', '>=', '<='].includes(operator)) {
+                    const numValue = Number(value);
+                    if (isNaN(numValue)) {
+                        throw new Error(`使用 ${operator} 运算符时，值必须是数字`);
+                    }
+                }
+
+                // 构建 XPath 表达式
+                let xpath;
+                switch (operator) {
+                    case '=':
+                        xpath = `//${elementName}[@${attribute}='${value}']`;
+                        break;
+                    case '!=':
+                        xpath = `//${elementName}[@${attribute}!='${value}']`;
+                        break;
+                    case '>':
+                        xpath = `//${elementName}[number(@${attribute}) > ${value}]`;
+                        break;
+                    case '<':
+                        xpath = `//${elementName}[number(@${attribute}) < ${value}]`;
+                        break;
+                    case '>=':
+                        xpath = `//${elementName}[number(@${attribute}) >= ${value}]`;
+                        break;
+                    case '<=':
+                        xpath = `//${elementName}[number(@${attribute}) <= ${value}]`;
+                        break;
+                }
+
+                const codeElements = xmlDocument.evaluate(
+                    xpath,
+                    xmlDocument,
+                    null,
+                    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                    null
+                );
+
+                if (codeElements.snapshotLength === 0) {
+                    results.innerHTML = '<p>未找到匹配结果</p>';
+                    results.style.display = 'block';
+                    return;
+                }
+
+                // 获取所有可能的属性名
+                let allAttributes = new Set();
+                for (let i = 0; i < codeElements.snapshotLength; i++) {
+                    const element = codeElements.snapshotItem(i);
+                    Array.from(element.attributes).forEach(attr => {
+                        allAttributes.add(attr.name);
+                    });
+                }
+
+                // 构建表格
+                let tableHTML = '<p style="margin-bottom: 10px; color: #666;">提示：点击表格标题可以复制整列数据</p>';
+                tableHTML += '<table class="result-table"><thead><tr>';
+                tableHTML += '<th>序号</th>';
+                let columnIndex = 1;
+                allAttributes.forEach(attr => {
+                    tableHTML += `<th onclick="handleHeaderClick(event, ${columnIndex}, '${attr}')">${attr}</th>`;
+                    columnIndex++;
+                });
+                tableHTML += '</tr></thead><tbody>';
+
+                // 表格内容
+                for (let i = 0; i < codeElements.snapshotLength; i++) {
+                    const element = codeElements.snapshotItem(i);
+                    tableHTML += `<tr><td>${i + 1}</td>`;
+                    allAttributes.forEach(attr => {
+                        const value = element.getAttribute(attr) || '';
+                        tableHTML += `<td>${value.replace(/\[GS\]/g, '\x1D')}</td>`;
+                    });
+                    tableHTML += '</tr>';
+                }
+
+                tableHTML += '</tbody></table>';
+                results.innerHTML = tableHTML;
+                results.style.display = 'block';
+            } catch (error) {
+                showStatus('查询执行失败：' + error.message, true);
+            }
+        });
+        
+        // DOM元素引用
+        const elementInput = document.getElementById('elementName');
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('数据已复制到剪贴板');
+            }).catch(err => {
+                console.error('复制失败:', err);
+                alert('复制失败，请重试');
+            });
+        }
+
+        function handleHeaderClick(e, columnIndex, columnName) {
+            if (columnIndex === 0) return; // Skip the first column
+            
+            if (confirm(`是否复制 ${columnName} 列的所有数据？`)) {
+                const table = document.querySelector('.result-table');
+                const rows = table.getElementsByTagName('tr');
+                let columnData = [];
+                
+                // Skip header row (i starts from 1)
+                for (let i = 1; i < rows.length; i++) {
+                    const cell = rows[i].getElementsByTagName('td')[columnIndex];
+                    if (cell) {
+                        columnData.push(cell.textContent);
+                    }
+                }
+                
+                copyToClipboard(columnData.join('\n'));
+            }
+        }
+    </script>
+</body>
+</html>
